@@ -3,14 +3,14 @@ use node::Node;
 use char_stream::CharStream;
 use std::collections::HashSet;
 
-pub struct NFA {
+pub struct NFA<T> where T : Fn(&Node, char) -> HashSet<Node> {
     states: usize,
     starting: HashSet<Node>,
-    delta: Box<dyn Fn(&Node, char) -> HashSet<Node>>,
+    delta: T,
     finished: HashSet<Node>
 }
 
-impl NFA {
+impl<T> NFA<T> where T : Fn(&Node, char) -> HashSet<Node> {
     pub fn is_match(&self, s : String) -> bool {
         let mut nodes : HashSet<Node> = self.starting.clone();
         let mut stream = CharStream::from_string(s);
@@ -32,7 +32,7 @@ impl NFA {
         }
         return matched;
     }
-    pub fn plus(&self, other : &Box<NFA>) -> Box<NFA> {
+    pub fn plus(&self, other : &NFA<impl Fn(&Node, char) -> HashSet<Node>>) -> NFA<impl Fn(&Node, char) -> HashSet<Node>> {
         let increase = |&node| {
             let Node(n) = node;
             return Node(n + self.states);
@@ -44,16 +44,16 @@ impl NFA {
             if n < self.states {
                 return (self.delta)(&node, ch);
             } else {
-                return (*(other.delta))(&Node(n - self.states), ch);
+                return (other.delta)(&Node(n - self.states), ch);
             }
         });
         let finished = self.finished.union(&other.finished.iter().map(increase).collect()).copied().collect();
-        return Box::new(NFA {
+        NFA {
             states,
             starting, 
             delta, 
             finished
-        })
+        }
     }
 }
 
