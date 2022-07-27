@@ -3,14 +3,14 @@ use node::Node;
 use char_stream::CharStream;
 use std::collections::HashSet;
 
-pub struct NFA<T : Fn(&Node, char) -> HashSet<Node>> {
+pub struct NFA {
     states: usize,
     starting: HashSet<Node>,
-    delta: T,
+    delta: Box<dyn Fn(&Node, char) -> HashSet<Node>>,
     finished: HashSet<Node>
 }
 
-impl<T> NFA<T> where T : Fn(&Node, char) -> HashSet<Node> {
+impl NFA {
     pub fn is_match(&self, s : String) -> bool {
         let mut nodes : HashSet<Node> = self.starting.clone();
         let mut stream = CharStream::from_string(s);
@@ -32,28 +32,28 @@ impl<T> NFA<T> where T : Fn(&Node, char) -> HashSet<Node> {
         }
         return matched;
     }
-    pub fn plus(&self, &other : &NFA<T>) -> NFA<T> {
+    pub fn plus(&self, other : &Box<NFA>) -> Box<NFA> {
         let increase = |&node| {
             let Node(n) = node;
             return Node(n + self.states);
         };
         let states = self.states + other.states;
         let starting = self.starting.union(&other.starting.iter().map(increase).collect()).copied().collect();
-        let delta = |&node : &Node, ch : char| -> HashSet<Node> {
+        let delta = Box::new(|&node : &Node, ch : char| -> HashSet<Node> {
             let Node(n) = node;
             if n < self.states {
                 return (self.delta)(&node, ch);
             } else {
-                return (other.delta)(&Node(n - self.states), ch);
+                return (*(other.delta))(&Node(n - self.states), ch);
             }
-        };
+        });
         let finished = self.finished.union(&other.finished.iter().map(increase).collect()).copied().collect();
-        return NFA {
+        return Box::new(NFA {
             states,
             starting, 
             delta, 
             finished
-        }
+        })
     }
 }
 
