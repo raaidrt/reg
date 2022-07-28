@@ -222,6 +222,9 @@ mod test {
         assert!(nfa.is_match(&mut stream));
         stream = CharStream::from_string(String::from("ba"));
         assert!(!nfa.is_match(&mut stream));
+        let another_nfa = times(&empty(), &nfa);
+        stream = CharStream::from_string(String::from("ab"));
+        assert!(another_nfa.is_match(&mut stream));
     }
     #[test]
     pub fn test_plus() {
