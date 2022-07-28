@@ -120,23 +120,17 @@ pub fn star(nfa: &NFA) -> NFA {
         finished.insert(Node(n));
     });
     let mut delta = nfa.delta.clone();
-    for &(Node(n), ch) in nfa.delta.keys() {
-        let mapped = nfa.delta.get(&(Node(n), ch));
-        match mapped {
-            Some(set) => {
-                let mut new_set = set.clone();
-                let added_starting = false;
-                for &Node(m) in set.iter() {
-                    if nfa.finished.contains(&Node(m)) && !added_starting {
-                        for &Node(p) in nfa.starting.iter() {
-                            new_set.insert(Node(p));
-                        }
-                    }
+    for (&(Node(n), ch), set) in nfa.delta.iter() {
+        let mut new_set = set.clone();
+        let added_starting = false;
+        for &Node(m) in set.iter() {
+            if nfa.finished.contains(&Node(m)) && !added_starting {
+                for &Node(p) in nfa.starting.iter() {
+                    new_set.insert(Node(p));
                 }
-                delta.insert((Node(n), ch), new_set);
             }
-            _ => {}
         }
+        delta.insert((Node(n), ch), new_set);
     }
     NFA {
         states: nfa.states,
