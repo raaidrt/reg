@@ -15,6 +15,7 @@ Cargo.lock
 
 # Vi swp files
 *.swp
+*.swo
 
 # Emacs files
 *~

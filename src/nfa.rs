@@ -1,142 +1,116 @@
 pub mod node;
-use node::Node;
 use char_stream::CharStream;
-use std::collections::{ HashSet, HashMap };
+use node::Node;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
 pub struct NFA {
     states: usize,
     starting: HashSet<Node>,
     delta: HashMap<(Node, char), HashSet<Node>>,
-    finished: HashSet<Node>
+    finished: HashSet<Node>,
 }
 
 impl NFA {
-    pub fn is_match(&self, stream : &mut CharStream) -> bool {
+    pub fn is_match(&self, stream: &mut CharStream) -> bool {
         let mut nodes: HashSet<Node> = self.starting.clone();
-        while let Some(ch) = stream.next() {
-            let mut new_nodes : HashSet<Node> = HashSet::new();
+        for ch in stream {
+            let mut new_nodes: HashSet<Node> = HashSet::new();
             for &node in nodes.iter() {
-                match self.delta.get(&(node, ch)) {
-                    Some(set) => {
-                        for &new_node in set.iter() {
-                            new_nodes.insert(new_node);
-                        }
-                    },
-                    _ => { }
+                if let Some(set) = self.delta.get(&(node, ch)) {
+                    for &new_node in set.iter() {
+                        new_nodes.insert(new_node);
+                    }
                 }
             }
             nodes = new_nodes;
         }
-        let mut matched = false;
-        for node in nodes.iter() {
-            if self.finished.contains(node) {
-                matched = true;
-                break;
-            }
-        }
-        return matched;
+        nodes.iter().any(|node| self.finished.contains(node))
     }
 }
 
 pub fn plus(first: &NFA, second: &NFA) -> NFA {
     let increase = |&node| {
         let Node(n) = node;
-        return Node(n + first.states);
+        Node(n + first.states)
     };
     let states = first.states + second.states;
-    let starting = first.starting.union(&second.starting.iter().map(increase).collect()).copied().collect();
-    let finished = first.finished.union(&second.finished.iter().map(increase).collect()).copied().collect();
+    let starting = first
+        .starting
+        .union(&second.starting.iter().map(increase).collect())
+        .copied()
+        .collect();
+    let finished = first
+        .finished
+        .union(&second.finished.iter().map(increase).collect())
+        .copied()
+        .collect();
 
     let mut delta = first.delta.clone();
-    
-    for &(Node(n), ch) in second.delta.keys() {
-        match second.delta.get(&(Node(n), ch)) {
-            Some(other_set) => {
-                let set = other_set.iter().map(increase).collect();
-                delta.insert((Node(n + first.states), ch), set);
-            },
-            None => {
-                panic!("This line should not execute");
-            }
-        }
+
+    for (&(Node(n), ch), set) in second.delta.iter() {
+        let set = set.iter().map(increase).collect();
+        delta.insert((Node(n + first.states), ch), set);
     }
 
     NFA {
         states,
-        starting, 
-        delta, 
-        finished
+        starting,
+        delta,
+        finished,
     }
 }
 
 pub fn times(first: &NFA, second: &NFA) -> NFA {
-    let states = first.states + second.states - first.finished.len(); 
+    let states = first.states + second.states - first.finished.len();
     let starting = first.starting.clone();
-    let increase = |&node : &Node| -> Node {
+    let increase = |&node: &Node| -> Node {
         let Node(n) = node;
-        return Node(n + first.states - first.finished.len());
+        Node(n + first.states - first.finished.len())
     };
     // any nodes mapping to a first.finished state should map to second.starting states as well
     let mut delta = first.delta.clone();
     let finished: HashSet<Node> = second.finished.iter().map(increase).collect();
     let second_starting: HashSet<Node> = second.starting.clone().iter().map(increase).collect();
-    for &(Node(n), ch) in first.delta.keys() {
-        let mapped = first.delta.get(&(Node(n), ch));
-        match mapped {
-            Some(set) => {
-                let mut new_set : HashSet<Node> = HashSet::new();
-                let mut added_second_starting = false;
-                for &Node(m) in set.iter() {
-                    if first.finished.contains(&Node(m)) {
-                        if !added_second_starting {
-                            added_second_starting = true;
-                            let mut tmp = new_set.clone();
-                            for &Node(p) in second_starting.iter() {
-                                tmp.insert(Node(p));
-                            }
-                            new_set = tmp;
-                        }
-                    } else {
-                        new_set.insert(Node(m));
+    for (&(Node(n), ch), set) in first.delta.iter() {
+        let mut new_set: HashSet<Node> = HashSet::new();
+        let mut added_second_starting = false;
+        for &Node(m) in set.iter() {
+            if first.finished.contains(&Node(m)) {
+                if !added_second_starting {
+                    added_second_starting = true;
+                    let mut tmp = new_set.clone();
+                    for &Node(p) in second_starting.iter() {
+                        tmp.insert(Node(p));
                     }
+                    new_set = tmp;
                 }
-                delta.insert((Node(n), ch), new_set);
-            },
-            _ => { }
+            } else {
+                new_set.insert(Node(m));
+            }
         }
+        delta.insert((Node(n), ch), new_set);
     }
-    for &(Node(n), ch) in second.delta.keys() {
-        let mapped = second.delta.get(&(Node(n), ch));
-        match mapped {
-            Some(set) => {
-                let new_set: HashSet<Node> = set.iter().map(increase).collect();
-                delta.insert((increase(&Node(n)), ch), new_set);
-            },
-            _ => { }
-        }
-    }
-    NFA {
-        states, 
-        starting, 
-        delta, 
-        finished
-    }
-}
 
-pub fn unit(ch : char) -> NFA {
-    let mut starting : HashSet<Node> = HashSet::new();
-    starting.insert(Node(0));
-    let states = 2;
-    let mut finished : HashSet<Node> = HashSet::new();
-    finished.insert(Node(1));
-    let mut delta : HashMap<(Node, char), HashSet<Node>> = HashMap::new();
-    delta.insert((Node(0), ch), finished.clone());
+    for (&(Node(n), ch), set) in second.delta.iter() {
+        let new_set: HashSet<Node> = set.iter().map(increase).collect();
+        delta.insert((increase(&Node(n)), ch), new_set);
+    }
+
     NFA {
         states,
         starting,
         delta,
-        finished
+        finished,
+    }
+}
+
+pub fn unit(ch: char) -> NFA {
+    NFA {
+        states: 2,
+        starting: [Node(0)].into(),
+        delta: [((Node(0), ch), [Node(1)].into())].into(),
+        finished: [Node(1)].into(),
     }
 }
 
@@ -160,29 +134,24 @@ pub fn star(nfa: &NFA) -> NFA {
                     }
                 }
                 delta.insert((Node(n), ch), new_set);
-            },
-            _ => { }
+            }
+            _ => {}
         }
     }
     NFA {
         states: nfa.states,
-        starting: nfa.starting.clone(), 
+        starting: nfa.starting.clone(),
         delta,
-        finished
+        finished,
     }
 }
 
 pub fn empty() -> NFA {
-    let mut starting = HashSet::new();
-    starting.insert(Node(0));
-    let delta = HashMap::new();
-    let mut finished = HashSet::new();
-    finished.insert(Node(0));
     NFA {
         states: 1,
-        starting,
-        delta, 
-        finished
+        starting: [Node(0)].into(),
+        delta: [].into(),
+        finished: [Node(0)].into(),
     }
 }
 
@@ -228,7 +197,10 @@ mod test {
     }
     #[test]
     pub fn test_plus() {
-        let nfa = plus(&times(&unit('a'), &unit('b')), &times(&unit('c'), &unit('d')));
+        let nfa = plus(
+            &times(&unit('a'), &unit('b')),
+            &times(&unit('c'), &unit('d')),
+        );
         let mut stream1 = CharStream::from_string(String::from("ab"));
         let mut stream2 = CharStream::from_string(String::from("cd"));
         let mut stream3 = CharStream::from_string(String::from("ac"));
@@ -252,6 +224,3 @@ mod test {
         assert!(!nfa.is_match(&mut stream));
     }
 }
-
-
-
