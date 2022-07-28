@@ -89,7 +89,6 @@ pub fn times(first: &NFA, second: &NFA) -> NFA {
                     for &Node(p) in second_starting.iter() {
                         new_set.insert(Node(p));
                     }
-                    new_set = tmp;
                 }
             }
         }
@@ -123,7 +122,7 @@ pub fn star(nfa: &NFA) -> NFA {
     let mut delta = nfa.delta.clone();
     for (&(Node(n), ch), set) in nfa.delta.iter() {
         let mut new_set = set.clone();
-        let added_starting = false;
+        let mut added_starting = false;
         for &Node(m) in set.iter() {
             if nfa.finished.contains(&Node(m)) && !added_starting {
                 added_starting = true;
