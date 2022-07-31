@@ -7,8 +7,14 @@ use std::collections::{HashMap, HashSet};
 pub struct NFA {
     states: usize,
     starting: HashSet<Node>,
-    delta: HashMap<(Node, char), HashSet<Node>>,
+    delta: HashMap<(Node, ExtendedChar), HashSet<Node>>,
     finished: HashSet<Node>,
+}
+
+#[derive(Hash, Eq, PartialEq, Debug, Copy, Clone)]
+pub enum ExtendedChar {
+    Char(char),
+    Wildcard
 }
 
 impl NFA {
@@ -17,7 +23,12 @@ impl NFA {
         for ch in stream {
             let mut new_nodes: HashSet<Node> = HashSet::new();
             for &node in nodes.iter() {
-                if let Some(set) = self.delta.get(&(node, ch)) {
+                if let Some(set) = self.delta.get(&(node, ExtendedChar::Char(ch))) {
+                    for &new_node in set.iter() {
+                        new_nodes.insert(new_node);
+                    }
+                }
+                if let Some(set) = self.delta.get(&(node, ExtendedChar::Wildcard)) {
                     for &new_node in set.iter() {
                         new_nodes.insert(new_node);
                     }
@@ -100,11 +111,11 @@ pub fn times(first: &NFA, second: &NFA) -> NFA {
     }
 }
 
-pub fn unit(ch: char) -> NFA {
+pub fn unit(ec: ExtendedChar) -> NFA {
     NFA {
         states: 2,
         starting: [Node(0)].into(),
-        delta: [((Node(0), ch), [Node(1)].into())].into(),
+        delta: [((Node(0), ec), [Node(1)].into())].into(),
         finished: [Node(1)].into(),
     }
 }
@@ -173,7 +184,7 @@ mod test {
 
     #[test]
     pub fn test_single_char() {
-        let nfa = unit('a');
+        let nfa = unit(ExtendedChar::Char('a'));
         test_within_bounds(&nfa);
         let mut stream = CharStream::from_string(String::from("a"));
         assert!(nfa.is_match(&mut stream));
@@ -181,7 +192,7 @@ mod test {
 
     #[test]
     pub fn test_nonsinglechar_rejects() {
-        let nfa = unit('a');
+        let nfa = unit(ExtendedChar::Char('a'));
         test_within_bounds(&nfa);
         let mut stream = CharStream::from_string(String::from("aa"));
         assert!(!nfa.is_match(&mut stream));
@@ -191,7 +202,7 @@ mod test {
 
     #[test]
     pub fn test_times() {
-        let nfa = times(&unit('a'), &unit('b'));
+        let nfa = times(&unit(ExtendedChar::Char('a')), &unit(ExtendedChar::Char('b')));
         test_within_bounds(&nfa);
         println!("NFA ab is {:?}", nfa);
         let mut stream = CharStream::from_string(String::from("ab"));
@@ -207,8 +218,8 @@ mod test {
     #[test]
     pub fn test_plus() {
         let nfa = plus(
-            &times(&unit('a'), &unit('b')),
-            &times(&unit('c'), &unit('d')),
+            &times(&unit(ExtendedChar::Char('a')), &unit(ExtendedChar::Char('b'))),
+            &times(&unit(ExtendedChar::Char('c')), &unit(ExtendedChar::Char('d'))),
         );
         let mut stream1 = CharStream::from_string(String::from("ab"));
         let mut stream2 = CharStream::from_string(String::from("cd"));
@@ -222,8 +233,20 @@ mod test {
     }
 
     #[test]
+    pub fn test_wildcard() {
+        let nfa = times(
+            &unit(ExtendedChar::Wildcard),
+            &unit(ExtendedChar::Wildcard)
+        );
+        let mut stream = CharStream::from_string(String::from("a"));
+        assert!(!nfa.is_match(&mut stream));
+        stream = CharStream::from_string(String::from("ab"));
+        assert!(nfa.is_match(&mut stream));
+    }
+
+    #[test]
     pub fn test_star_simple() {
-        let nfa = star(&unit('a'));
+        let nfa = star(&unit(ExtendedChar::Char('a')));
         test_within_bounds(&nfa);
         println!("NFA a* is {:?}", nfa);
         let mut stream = CharStream::from_string(String::from(""));
@@ -234,19 +257,19 @@ mod test {
         assert!(nfa.is_match(&mut stream));
         stream = CharStream::from_string(String::from("aba"));
         assert!(!nfa.is_match(&mut stream));
-        let nfa2 = times(&star(&times(&unit('a'), &unit('b'))), &unit('c'));
-        println!("NFA2 is {:?}", nfa2);
+        let another_nfa = times(&star(&times(&unit(ExtendedChar::Char('a')), &unit(ExtendedChar::Char('b')))), &star(&unit(ExtendedChar::Char('c'))));
+        println!("NFA2 is {:?}", another_nfa);
+        stream = CharStream::from_string(String::from("ababab"));
+        assert!(another_nfa.is_match(&mut stream));
+        stream = CharStream::from_string(String::from("ababccc"));
+        assert!(another_nfa.is_match(&mut stream));
+        stream = CharStream::from_string(String::from("abb"));
+        assert!(!another_nfa.is_match(&mut stream));
     }
 
     #[test]
     pub fn test_star_with_plus_and_times() {
-        let nfa = times(&star(&plus(&unit('a'), &unit('b'))), &star(&unit('c')));
-        let nfa2 = star(&times(&unit('a'), &unit('b')));
-        println!("NFA (ab)* is {:?}", nfa2);
-        println!("NFA (ab)*c is {:?}", times(&nfa2, &unit('c')));
-        print!("The nfa is {:?}", nfa);
-        test_within_bounds(&nfa);
-        test_within_bounds(&nfa2);
+        let nfa = times(&star(&plus(&unit(ExtendedChar::Char('a')), &unit(ExtendedChar::Char('b')))), &star(&unit(ExtendedChar::Char('c'))));
         let mut stream1 = CharStream::from_string(String::from("a"));
         let mut stream2 = CharStream::from_string(String::from("abababbbaba"));
         let mut stream3 = CharStream::from_string(String::from("abababbbabaccc"));
@@ -255,5 +278,10 @@ mod test {
         assert!(nfa.is_match(&mut stream2));
         assert!(nfa.is_match(&mut stream3));
         assert!(!nfa.is_match(&mut stream4));
+        test_within_bounds(&nfa);
+        let another_nfa = star(&times(&unit(ExtendedChar::Char('a')), &unit(ExtendedChar::Char('b'))));
+        test_within_bounds(&another_nfa);
+        let mut stream = CharStream::from_string(String::from("abb"));
+        assert!(!another_nfa.is_match(&mut stream));
     }
 }
