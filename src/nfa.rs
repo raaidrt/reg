@@ -2,6 +2,9 @@ pub mod node;
 use char_stream::CharStream;
 use node::Node;
 use std::collections::{HashMap, HashSet};
+use std::thread;
+use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{channel, Sender, Receiver};
 
 #[derive(Debug)]
 pub struct NFA {
@@ -11,10 +14,65 @@ pub struct NFA {
     finished: HashSet<Node>,
 }
 
+fn recfn(nfa: &'static NFA, seen_configs: & mut Arc<HashSet<(Node, usize)>>, num_threads: &Arc<Mutex<usize>>, hashset_mutex: &Arc<Mutex<()>>, rx: Receiver<bool>, tx: Sender<bool>, node: Node, index: usize, string: &'static str) {
+    let send_and_update_mutex = |to_send: bool| {
+        let mut num_threads = num_threads.lock().unwrap();
+        *num_threads -= 1;
+        tx.send(to_send).unwrap();
+    };
+    if index >= string.len() && !nfa.finished.contains(&node) {
+        send_and_update_mutex(false);
+    } else if nfa.finished.contains(&node) {
+        send_and_update_mutex(true);
+    } else if seen_configs.contains(&(node, index)) {
+        send_and_update_mutex(false);
+    } else {
+        {
+            let _ = hashset_mutex.lock().unwrap();
+            (*Arc::make_mut(seen_configs)).insert((node.clone(), index));
+        }
+        if let Some(set) = nfa.delta.get(&(node, string.as_bytes()[index] as char)) {
+            for &node in set {
+                let num_threads = Arc::clone(num_threads);
+                let hashset_mutex = Arc::clone(hashset_mutex);
+                let seen_configs = Arc::clone(seen_configs);
+                thread::spawn(move || {
+                    recfn(nfa, &mut seen_configs, &num_threads, &hashset_mutex, rx, tx.clone(), node.clone(), index + 1, string);
+                });
+            }
+        }
+    }
+}
 impl NFA {
-    pub fn is_match(&self, stream: &mut CharStream) -> bool {
+    pub fn is_match(&self, string: &String) -> bool {
+        let seen_configs: Arc<HashSet<(Node, u128)>> = Arc::new([].into());
+        let num_threads = Arc::new(Mutex::new(self.starting.len()));
+        let hashset_mutex = Arc::new(Mutex::new(()));
+        let (tx, rx) = channel();
+        let mut works = false;
+        
+        
+        for &Node(n) in self.starting.iter() {
+            let (num_threads, tx) = (Arc::clone(&num_threads), tx.clone());
+            
+            
+
+            thread::spawn(move || {
+                let (num_threads, tx) = (Arc::clone(&num_threads), tx.clone());
+                let mut num_threads = num_threads.lock().unwrap();
+                *num_threads -= 1;
+            });
+        }
+        
+        while {
+            let num = (*num_threads).lock().unwrap();
+            *num > 0
+        } {
+            works = works || rx.recv().unwrap();
+        }
+
         let mut nodes: HashSet<Node> = self.starting.clone();
-        for ch in stream {
+        for ch in CharStream::from(string) {
             let mut new_nodes: HashSet<Node> = HashSet::new();
             for &node in nodes.iter() {
                 if let Some(set) = self.delta.get(&(node, ch)) {
@@ -68,10 +126,15 @@ pub fn times(first: &NFA, second: &NFA) -> NFA {
         return Node(n + first.states);
     };
     let mut starting = first.starting.clone();
-    if first.starting.iter().any(|&node| {
-        first.finished.contains(&node)
-    }) {
-        starting = starting.union(&second.starting.iter().map(increase).collect()).copied().collect();
+    if first
+        .starting
+        .iter()
+        .any(|&node| first.finished.contains(&node))
+    {
+        starting = starting
+            .union(&second.starting.iter().map(increase).collect())
+            .copied()
+            .collect();
     }
     // any nodes mapping to a first.finished state should map to second.starting states as well
     let mut delta = first.delta.clone();
@@ -79,9 +142,7 @@ pub fn times(first: &NFA, second: &NFA) -> NFA {
     let second_starting: HashSet<Node> = second.starting.clone().iter().map(increase).collect();
     for (&(Node(n), ch), set) in first.delta.iter() {
         let mut new_set: HashSet<Node> = set.clone();
-        if set.iter().any(|&node| {
-            first.finished.contains(&node)
-        }) {
+        if set.iter().any(|&node| first.finished.contains(&node)) {
             new_set = new_set.union(&second_starting).copied().collect();
         }
         delta.insert((Node(n), ch), new_set);
@@ -114,9 +175,7 @@ pub fn star(nfa: &NFA) -> NFA {
     let mut delta = nfa.delta.clone();
     for (&(Node(n), ch), set) in nfa.delta.iter() {
         let mut new_set = set.clone();
-        if set.iter().any(|&node| {
-            nfa.finished.contains(&node)
-        }) {
+        if set.iter().any(|&node| nfa.finished.contains(&node)) {
             new_set = new_set.union(&nfa.starting).copied().collect();
         }
         delta.insert((Node(n), ch), new_set);
@@ -159,34 +218,34 @@ mod test {
     pub fn test_empty() {
         let nfa = empty();
         test_within_bounds(&nfa);
-        let mut stream = CharStream::from_string(String::from(""));
-        assert!(nfa.is_match(&mut stream));
+        let stream = String::from("");
+        assert!(nfa.is_match(&stream));
     }
 
     #[test]
     pub fn test_nonempty_rejects() {
         let nfa = empty();
         test_within_bounds(&nfa);
-        let mut stream = CharStream::from_string(String::from("a"));
-        assert!(!nfa.is_match(&mut stream));
+        let stream = String::from("a");
+        assert!(!nfa.is_match(&stream));
     }
 
     #[test]
     pub fn test_single_char() {
         let nfa = unit('a');
         test_within_bounds(&nfa);
-        let mut stream = CharStream::from_string(String::from("a"));
-        assert!(nfa.is_match(&mut stream));
+        let stream = String::from("a");
+        assert!(nfa.is_match(&stream));
     }
 
     #[test]
     pub fn test_nonsinglechar_rejects() {
         let nfa = unit('a');
         test_within_bounds(&nfa);
-        let mut stream = CharStream::from_string(String::from("aa"));
-        assert!(!nfa.is_match(&mut stream));
-        stream = CharStream::from_string(String::from(""));
-        assert!(!nfa.is_match(&mut stream));
+        let stream = String::from("aa");
+        assert!(!nfa.is_match(&stream));
+        let stream = String::from("");
+        assert!(!nfa.is_match(&stream));
     }
 
     #[test]
@@ -194,12 +253,12 @@ mod test {
         let nfa = times(&unit('a'), &unit('b'));
         test_within_bounds(&nfa);
         println!("NFA ab is {:?}", nfa);
-        let mut stream = CharStream::from_string(String::from("ab"));
-        assert!(nfa.is_match(&mut stream));
-        stream = CharStream::from_string(String::from("ba"));
-        assert!(!nfa.is_match(&mut stream));
+        let mut stream = String::from("ab");
+        assert!(nfa.is_match(&stream));
+        stream = String::from("ba");
+        assert!(!nfa.is_match(&stream));
         let another_nfa = times(&empty(), &nfa);
-        stream = CharStream::from_string(String::from("ab"));
+        stream = String::from("ab");
         println!("Another nfa is {:?}", another_nfa);
         assert!(another_nfa.is_match(&mut stream));
     }
@@ -210,15 +269,15 @@ mod test {
             &times(&unit('a'), &unit('b')),
             &times(&unit('c'), &unit('d')),
         );
-        let mut stream1 = CharStream::from_string(String::from("ab"));
-        let mut stream2 = CharStream::from_string(String::from("cd"));
-        let mut stream3 = CharStream::from_string(String::from("ac"));
-        let mut stream4 = CharStream::from_string(String::from("cb"));
-        print!("The nfa is {:?}", nfa);
-        assert!(nfa.is_match(&mut stream1));
-        assert!(nfa.is_match(&mut stream2));
-        assert!(!nfa.is_match(&mut stream3));
-        assert!(!nfa.is_match(&mut stream4));
+        let stream1 = String::from("ab");
+        let stream2 = String::from("cd");
+        let stream3 = String::from("ac");
+        let stream4 = String::from("cb");
+        println!("The nfa is {:?}", nfa);
+        assert!(nfa.is_match(&stream1));
+        assert!(nfa.is_match(&stream2));
+        assert!(!nfa.is_match(&stream3));
+        assert!(!nfa.is_match(&stream4));
     }
 
     #[test]
@@ -226,14 +285,14 @@ mod test {
         let nfa = star(&unit('a'));
         test_within_bounds(&nfa);
         println!("NFA a* is {:?}", nfa);
-        let mut stream = CharStream::from_string(String::from(""));
-        assert!(nfa.is_match(&mut stream));
-        stream = CharStream::from_string(String::from("a"));
-        assert!(nfa.is_match(&mut stream));
-        stream = CharStream::from_string(String::from("aa"));
-        assert!(nfa.is_match(&mut stream));
-        stream = CharStream::from_string(String::from("aba"));
-        assert!(!nfa.is_match(&mut stream));
+        let stream = String::from("");
+        assert!(nfa.is_match(&stream));
+        let stream = String::from("a");
+        assert!(nfa.is_match(&stream));
+        let stream = String::from("aa");
+        assert!(nfa.is_match(&stream));
+        let stream = String::from("aba");
+        assert!(!nfa.is_match(&stream));
         let nfa2 = times(&star(&times(&unit('a'), &unit('b'))), &unit('c'));
         println!("NFA2 is {:?}", nfa2);
     }
@@ -244,16 +303,20 @@ mod test {
         let nfa2 = star(&times(&unit('a'), &unit('b')));
         println!("NFA (ab)* is {:?}", nfa2);
         println!("NFA (ab)*c is {:?}", times(&nfa2, &unit('c')));
-        print!("The nfa is {:?}", nfa);
+        let stream = String::from("ab");
+        assert!(!times(&nfa2, &unit('c')).is_match(&stream));
+        let stream = String::from("ababababc");
+        assert!(times(&nfa2, &unit('c')).is_match(&stream));
+        println!("The nfa is {:?}", nfa);
         test_within_bounds(&nfa);
         test_within_bounds(&nfa2);
-        let mut stream1 = CharStream::from_string(String::from("a"));
-        let mut stream2 = CharStream::from_string(String::from("abababbbaba"));
-        let mut stream3 = CharStream::from_string(String::from("abababbbabaccc"));
-        let mut stream4 = CharStream::from_string(String::from("ababaaaababbaccbc"));
-        assert!(nfa.is_match(&mut stream1));
-        assert!(nfa.is_match(&mut stream2));
-        assert!(nfa.is_match(&mut stream3));
-        assert!(!nfa.is_match(&mut stream4));
+        let stream1 = String::from("a");
+        let stream2 = String::from("abababbbaba");
+        let stream3 = String::from("abababbbabaccc");
+        let stream4 = String::from("ababaaaababbaccbc");
+        assert!(nfa.is_match(&stream1));
+        assert!(nfa.is_match(&stream2));
+        assert!(nfa.is_match(&stream3));
+        assert!(!nfa.is_match(&stream4));
     }
 }
